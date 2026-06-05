@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Rizz Detector 3000</title>
+<style>
+  :root { --neon:#16f2c8; --pink:#ff3df0; --bg:#06070f; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; margin:0; padding:0; }
+  html,body { height:100%; }
+  body {
+    font-family: "Arial Black", system-ui, sans-serif;
+    background: radial-gradient(circle at 50% 20%, #14123a, var(--bg));
+    color:#eafff9; overflow:hidden; touch-action:manipulation;
+  }
+  #cam { position:fixed; inset:0; width:100%; height:100%; object-fit:cover;
+    transform:scaleX(-1); filter:contrast(1.1) saturate(1.2); opacity:.55; }
+  #scan-grid { position:fixed; inset:0; pointer-events:none;
+    background:
+      linear-gradient(transparent 95%, rgba(22,242,200,.25) 96%) 0 0/100% 28px,
+      linear-gradient(90deg, transparent 95%, rgba(22,242,200,.18) 96%) 0 0/28px 100%;
+    mix-blend-mode:screen; }
+  .wrap { position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:space-between; padding:28px 20px; }
+  h1 { font-size:30px; text-align:center; letter-spacing:1px; line-height:1.05;
+    text-shadow:0 0 14px var(--neon), 0 0 30px var(--pink); }
+  h1 small { display:block; font-size:13px; color:var(--neon); letter-spacing:4px; margin-top:6px; }
+  .reticle { position:relative; width:230px; height:230px; align-self:center;
+    border:2px solid rgba(22,242,200,.6); border-radius:50%;
+    box-shadow:0 0 25px rgba(22,242,200,.4), inset 0 0 25px rgba(22,242,200,.25);
+    display:flex; align-items:center; justify-content:center; }
+  .reticle::before,.reticle::after { content:""; position:absolute; background:rgba(22,242,200,.5); }
+  .reticle::before { left:50%; top:8%; bottom:8%; width:1px; transform:translateX(-50%); }
+  .reticle::after { top:50%; left:8%; right:8%; height:1px; transform:translateY(-50%); }
+  .sweep { position:absolute; left:0; right:0; height:3px; top:0;
+    background:linear-gradient(90deg,transparent,var(--neon),transparent);
+    box-shadow:0 0 18px var(--neon); opacity:0; }
+  .scanning .sweep { opacity:1; animation:sweep 1.2s linear infinite; }
+  @keyframes sweep { 0%{top:0} 100%{top:100%} }
+  .meterbox { width:min(420px,90%); }
+  .meterlabel { display:flex; justify-content:space-between; font-size:12px;
+    letter-spacing:2px; color:var(--neon); margin-bottom:6px; }
+  .meter { height:18px; border:1px solid rgba(22,242,200,.6); border-radius:10px; overflow:hidden;
+    background:rgba(0,0,0,.4); }
+  .fill { height:100%; width:0%; border-radius:10px;
+    background:linear-gradient(90deg,var(--neon),var(--pink)); transition:width .08s linear; }
+  .score { font-size:96px; line-height:1; text-align:center; display:none;
+    text-shadow:0 0 22px var(--neon), 0 0 50px var(--pink); }
+  .verdict { font-size:24px; text-align:center; min-height:30px; }
+  button { font-family:inherit; font-size:20px; font-weight:900; letter-spacing:1px;
+    padding:16px 22px; width:min(420px,90%); border:none; border-radius:16px; cursor:pointer;
+    color:#04110d; background:linear-gradient(90deg,var(--neon),var(--pink));
+    box-shadow:0 0 22px rgba(22,242,200,.5); }
+  button:active { transform:scale(.97); }
+  .ghost { background:transparent; color:var(--neon); border:2px solid var(--neon); box-shadow:none; }
+  .stack { display:flex; flex-direction:column; gap:10px; width:100%; align-items:center; }
+  .confetti { position:fixed; top:-40px; font-size:28px; pointer-events:none; animation:fall linear forwards; }
+  @keyframes fall { to { transform:translateY(110vh) rotate(540deg); opacity:.2; } }
+  .hint { font-size:12px; color:#8be9d6; opacity:.8; text-align:center; min-height:16px; }
+</style>
+</head>
+<body>
+  <video id="cam" autoplay playsinline muted></video>
+  <div id="scan-grid"></div>
+  <div class="wrap">
+    <h1>RIZZ DETECTOR<small>3 0 0 0</small></h1>
+
+    <div class="reticle" id="reticle">
+      <div class="sweep"></div>
+      <div class="score" id="score">0</div>
+    </div>
+
+    <div class="meterbox">
+      <div class="meterlabel"><span>RIZZ LEVEL</span><span id="pct">0%</span></div>
+      <div class="meter"><div class="fill" id="fill"></div></div>
+      <div class="verdict" id="verdict">Tap SCAN and talk into the mic 🎤</div>
+    </div>
+
+    <div class="stack">
+      <button id="action">▶ SCAN ME</button>
+      <button id="share" class="ghost" style="display:none">📸 Share / Screenshot</button>
+      <div class="hint" id="hint"></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const cam=document.getElementById('cam'), reticle=document.getElementById('reticle');
+  const fill=document.getElementById('fill'), pct=document.getElementById('pct');
+  const scoreEl=document.getElementById('score'), verdict=document.getElementById('verdict');
+  const action=document.getElementById('action'), shareBtn=document.getElementById('share');
+  const hint=document.getElementById('hint');
+  let analyser=null, data=null, micOK=false, lastScore=0, busy=false;
+
+  async function initSensors(){
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:true});
+      cam.srcObject=stream;
+      const ctx=new (window.AudioContext||window.webkitAudioContext)();
+      const src=ctx.createMediaStreamSource(stream);
+      analyser=ctx.createAnalyser(); analyser.fftSize=256;
+      src.connect(analyser); data=new Uint8Array(analyser.frequencyBinCount);
+      micOK=true; window._actx=ctx;
+    }catch(e){
+      micOK=false;
+      document.body.style.background='radial-gradient(circle at 50% 20%, #2a1145, #06070f)';
+      hint.textContent='Camera/mic off — running in demo mode. Allow access for the full scan.';
+    }
+  }
+  function micLevel(){
+    if(!micOK||!analyser) return Math.random()*0.5+0.2;
+    analyser.getByteFrequencyData(data);
+    let s=0; for(let i=0;i<data.length;i++) s+=data[i];
+    return Math.min(1,(s/data.length)/90);
+  }
+  function beep(t){
+    if(!window._actx) return;
+    const o=window._actx.createOscillator(), g=window._actx.createGain();
+    o.type='sawtooth'; o.frequency.setValueAtTime(420+t*900,window._actx.currentTime);
+    g.gain.setValueAtTime(.04,window._actx.currentTime);
+    o.connect(g); g.connect(window._actx.destination); o.start(); o.stop(window._actx.currentTime+.05);
+  }
+  function verdictFor(s){
+    if(s>=90) return "💎 CERTIFIED RIZZLER";
+    if(s>=70) return "🔥 W Rizz";
+    if(s>=40) return "😏 Mid Rizz";
+    if(s>=15) return "💀 Negative Aura";
+    return "🤖 NPC energy";
+  }
+  function confetti(){
+    const e=["💎","✨","🔥","💖","😎","💯"];
+    for(let i=0;i<40;i++){const c=document.createElement('div');c.className='confetti';
+      c.textContent=e[i%e.length];c.style.left=Math.random()*100+'vw';
+      c.style.animationDuration=(1.5+Math.random()*1.8)+'s';c.style.fontSize=(20+Math.random()*26)+'px';
+      document.body.appendChild(c);setTimeout(()=>c.remove(),3600);}
+  }
+  async function scan(){
+    if(busy) return; busy=true;
+    if(window._actx&&window._actx.state==='suspended') window._actx.resume();
+    action.style.display='none'; shareBtn.style.display='none'; hint.textContent='';
+    scoreEl.style.display='none'; reticle.classList.add('scanning');
+    verdict.textContent='SCANNING…';
+    const start=performance.now(), dur=3000;
+    await new Promise(res=>{
+      (function loop(now){
+        const t=(now-start)/dur, lvl=micLevel();
+        const shown=Math.round(lvl*100);
+        fill.style.width=shown+'%'; pct.textContent=shown+'%';
+        if(Math.random()<.3) beep(lvl);
+        if(t<1) requestAnimationFrame(loop); else res();
+      })(start);
+    });
+    reticle.classList.remove('scanning');
+    lastScore=Math.floor(Math.random()*101);
+    fill.style.width=lastScore+'%'; pct.textContent=lastScore+'%';
+    scoreEl.textContent=lastScore; scoreEl.style.display='block';
+    verdict.textContent=verdictFor(lastScore);
+    if(lastScore>=90) confetti();
+    action.textContent='▶ SCAN AGAIN'; action.style.display='block'; shareBtn.style.display='block';
+    busy=false;
+  }
+  shareBtn.addEventListener('click',async()=>{
+    const txt=`My Rizz Level is ${lastScore}/100 — ${verdictFor(lastScore)} 📡 Rizz Detector 3000`;
+    if(navigator.share){ try{ await navigator.share({title:'Rizz Detector 3000',text:txt}); }catch(e){} }
+    else { hint.textContent='📸 Screenshot this and post it!'; try{await navigator.clipboard.writeText(txt);}catch(e){} }
+  });
+  action.addEventListener('click',scan);
+  initSensors();
+})();
+</script>
+</body>
+</html>
